@@ -13,11 +13,11 @@
 // ================================================================
 
 public Plugin myinfo = {
-    name        = "pSilent Fix",
-    author      = "RenardDev",
+    name = "pSilent Fix",
+    author = "RenardDev",
     description = "pSilent Fix",
-    version     = "1.4.0",
-    url         = "https://github.com/RenardDev/L4D2-pSilentFix"
+    version = "1.4.0",
+    url = "https://github.com/RenardDev/L4D2-pSilentFix"
 };
 
 // ================================================================
