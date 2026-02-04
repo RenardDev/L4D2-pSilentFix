@@ -155,7 +155,7 @@ static bool HasFreshEyeAngles(int nClient, int nTickNow, int nWindowTicks) {
         return false;
     }
 
-    return (nDeltaTicks <= nWindowTicks);
+    return nDeltaTicks <= nWindowTicks;
 }
 
 // ================================================================
