@@ -16,7 +16,7 @@ public Plugin myinfo = {
     name        = "pSilent Fix",
     author      = "RenardDev",
     description = "pSilent Fix",
-    version     = "1.3.1",
+    version     = "1.4.0",
     url         = "https://github.com/RenardDev/L4D2-pSilentFix"
 };
 
@@ -26,13 +26,9 @@ public Plugin myinfo = {
 
 enum {
     ANGLE_PITCH = 0,
-    ANGLE_YAW   = 1,
-    ANGLE_ROLL  = 2
+    ANGLE_YAW = 1,
+    ANGLE_ROLL = 2
 };
-
-static const int QANGLE_PITCH_OFFS = 0;
-static const int QANGLE_YAW_OFFS   = 4;
-static const int QANGLE_ROLL_OFFS  = 8;
 
 // ================================================================
 // ConVars
@@ -46,14 +42,18 @@ ConVar g_ConVarFireDelta;
 // DHooks
 // ================================================================
 
-GameData      g_hGameData;
-DynamicHook   g_hHookProcessUserCmds;
-DynamicDetour g_hDetourFireBullet;
+GameData g_hGameData;
 
-bool g_bDetourEnabled = false;
+DynamicHook g_hHookProcessUserCmds;
+
+DynamicDetour g_hDetourFireBullet;
+DynamicDetour g_hDetourTEFireBullets;
+
+bool g_bDetourFireBulletEnabled = false;
+bool g_bDetourTEFireBulletsEnabled = false;
 
 // Per-client hook id
-int g_nHookIDPre[MAXPLAYERS + 1] = { INVALID_HOOK_ID, ... };
+int g_nHookIDProcessUserCmdsPre[MAXPLAYERS + 1] = { INVALID_HOOK_ID, ... };
 
 // ================================================================
 // State
@@ -66,6 +66,18 @@ float g_flEyeAngles[MAXPLAYERS + 1][3];
 // ================================================================
 // Utils
 // ================================================================
+
+static bool IsValidClient(int nClient) {
+    if ((nClient <= 0) || (nClient > MaxClients)) {
+        return false;
+    }
+
+    if (!IsClientInGame(nClient) || IsFakeClient(nClient)) {
+        return false;
+    }
+
+    return true;
+}
 
 static int ClampInt(int nValue, int nMin, int nMax) {
     if (nValue < nMin) {
@@ -98,15 +110,15 @@ static void WriteFloat(Address pAddress, float flValue) {
 }
 
 static void ReadQAngle(Address pAngleAddress, float flAngles[3]) {
-    flAngles[ANGLE_PITCH] = ReadFloat(pAngleAddress + view_as<Address>(QANGLE_PITCH_OFFS));
-    flAngles[ANGLE_YAW]   = ReadFloat(pAngleAddress + view_as<Address>(QANGLE_YAW_OFFS));
-    flAngles[ANGLE_ROLL]  = ReadFloat(pAngleAddress + view_as<Address>(QANGLE_ROLL_OFFS));
+    flAngles[ANGLE_PITCH] = ReadFloat(pAngleAddress + view_as<Address>(0));
+    flAngles[ANGLE_YAW] = ReadFloat(pAngleAddress + view_as<Address>(4));
+    flAngles[ANGLE_ROLL] = ReadFloat(pAngleAddress + view_as<Address>(8));
 }
 
 static void WriteQAngle(Address pAngleAddress, const float flAngles[3]) {
-    WriteFloat(pAngleAddress + view_as<Address>(QANGLE_PITCH_OFFS), flAngles[ANGLE_PITCH]);
-    WriteFloat(pAngleAddress + view_as<Address>(QANGLE_YAW_OFFS),   flAngles[ANGLE_YAW]);
-    WriteFloat(pAngleAddress + view_as<Address>(QANGLE_ROLL_OFFS),  flAngles[ANGLE_ROLL]);
+    WriteFloat(pAngleAddress + view_as<Address>(0), flAngles[ANGLE_PITCH]);
+    WriteFloat(pAngleAddress + view_as<Address>(4), flAngles[ANGLE_YAW]);
+    WriteFloat(pAngleAddress + view_as<Address>(8), flAngles[ANGLE_ROLL]);
 }
 
 // wrap 360 -> [-180..180]
@@ -127,7 +139,7 @@ static float AngleDifference(float flA, float flB) {
 // max(|dpitch|, |dyaw|)
 static float AngleDistanceMax(const float flA[3], const float flB[3]) {
     float flDeltaPitch = FloatAbs(AngleDifference(flA[ANGLE_PITCH], flB[ANGLE_PITCH]));
-    float flDeltaYaw   = FloatAbs(AngleDifference(flA[ANGLE_YAW],   flB[ANGLE_YAW]));
+    float flDeltaYaw = FloatAbs(AngleDifference(flA[ANGLE_YAW],   flB[ANGLE_YAW]));
 
     return (flDeltaPitch > flDeltaYaw) ? flDeltaPitch : flDeltaYaw;
 }
@@ -138,11 +150,11 @@ static float AngleDistanceMax(const float flA[3], const float flB[3]) {
 
 static void ResetClientState(int nClient) {
     g_bEyeAnglesValid[nClient] = false;
-    g_nEyeAnglesTick[nClient]  = 0;
+    g_nEyeAnglesTick[nClient] = 0;
 
-    g_flEyeAngles[nClient][0] = 0.0;
-    g_flEyeAngles[nClient][1] = 0.0;
-    g_flEyeAngles[nClient][2] = 0.0;
+    g_flEyeAngles[nClient][ANGLE_PITCH] = 0.0;
+    g_flEyeAngles[nClient][ANGLE_YAW] = 0.0;
+    g_flEyeAngles[nClient][ANGLE_ROLL] = 0.0;
 }
 
 static bool HasFreshEyeAngles(int nClient, int nTickNow, int nWindowTicks) {
@@ -159,28 +171,43 @@ static bool HasFreshEyeAngles(int nClient, int nTickNow, int nWindowTicks) {
 }
 
 // ================================================================
-// Detour enable/disable
+// Detours enable/disable
 // ================================================================
 
-static void ApplyFireBulletDetour(bool bEnable) {
+static void ApplyDetours(bool bEnable) {
     if (bEnable) {
-        if ((!g_bDetourEnabled && (g_hDetourFireBullet != null)) {
-            g_bDetourEnabled = g_hDetourFireBullet.Enable(Hook_Pre, Detour_FireBullet_Pre);
-            if (!g_bDetourEnabled) {
-                LogError("Failed to enable FireBullet detour");
+        if ((!g_bDetourTEFireBulletsEnabled) && (g_hDetourTEFireBullets != null)) {
+            g_bDetourTEFireBulletsEnabled = g_hDetourTEFireBullets.Enable(Hook_Pre, Detour_TE_FireBullets_Pre);
+            if (!g_bDetourTEFireBulletsEnabled) {
+                LogError("Failed to enable TE_FireBullets detour");
+            }
+        }
+
+        if ((!g_bDetourFireBulletEnabled) && (g_hDetourFireBullet != null)) {
+            g_bDetourFireBulletEnabled = g_hDetourFireBullet.Enable(Hook_Pre, Detour_FireBullet_Pre);
+            if (!g_bDetourFireBulletEnabled) {
+                LogError("Failed to enable CTerrorPlayer::FireBullet detour");
             }
         }
 
         return;
     }
 
-    if (g_bDetourEnabled && (g_hDetourFireBullet != null)) {
-        if (!g_hDetourFireBullet.Disable(Hook_Pre, Detour_FireBullet_Pre)) {
-            LogError("Failed to disable FireBullet detour");
+    if (g_bDetourTEFireBulletsEnabled && (g_hDetourTEFireBullets != null)) {
+        if (!g_hDetourTEFireBullets.Disable(Hook_Pre, Detour_TE_FireBullets_Pre)) {
+            LogError("Failed to disable TE_FireBullets detour");
         }
     }
 
-    g_bDetourEnabled = false;
+    g_bDetourTEFireBulletsEnabled = false;
+
+    if (g_bDetourFireBulletEnabled && (g_hDetourFireBullet != null)) {
+        if (!g_hDetourFireBullet.Disable(Hook_Pre, Detour_FireBullet_Pre)) {
+            LogError("Failed to disable CTerrorPlayer::FireBullet detour");
+        }
+    }
+
+    g_bDetourFireBulletEnabled = false;
 }
 
 // ================================================================
@@ -188,20 +215,16 @@ static void ApplyFireBulletDetour(bool bEnable) {
 // ================================================================
 
 static void UnHookClient(int nClient) {
-    if (g_nHookIDPre[nClient] != INVALID_HOOK_ID) {
-        DynamicHook.RemoveHook(g_nHookIDPre[nClient]);
-        g_nHookIDPre[nClient] = INVALID_HOOK_ID;
+    if (g_nHookIDProcessUserCmdsPre[nClient] != INVALID_HOOK_ID) {
+        DynamicHook.RemoveHook(g_nHookIDProcessUserCmdsPre[nClient]);
+        g_nHookIDProcessUserCmdsPre[nClient] = INVALID_HOOK_ID;
     }
 
     ResetClientState(nClient);
 }
 
 static void HookClient(int nClient) {
-    if ((nClient <= 0) || (nClient > MaxClients)) {
-        return;
-    }
-
-    if (!IsClientInGame(nClient) || IsFakeClient(nClient)) {
+    if (!IsValidClient(nClient)) {
         return;
     }
 
@@ -211,25 +234,20 @@ static void HookClient(int nClient) {
         return;
     }
 
-    g_nHookIDPre[nClient] = g_hHookProcessUserCmds.HookEntity(Hook_Pre, nClient, Hook_ProcessUserCmds_Pre);
-    if (g_nHookIDPre[nClient] == INVALID_HOOK_ID) {
-        LogError("Failed to hook ProcessUsercmds (client=%d)", nClient);
+    g_nHookIDProcessUserCmdsPre[nClient] = g_hHookProcessUserCmds.HookEntity(Hook_Pre, nClient, Hook_ProcessUserCmds_Pre);
+    if (g_nHookIDProcessUserCmdsPre[nClient] == INVALID_HOOK_ID) {
+        LogError("Failed to hook ProcessUsercmds PRE (client=%d)", nClient);
         return;
     }
 }
 
 static void HookAllClients() {
     for (int nClient = 1; nClient <= MaxClients; nClient++) {
-        if ((nClient <= 0) || (nClient > MaxClients)) {
-            continue;
-        }
-
-        if (!IsClientInGame(nClient) || IsFakeClient(nClient)) {
+        if (IsValidClient(nClient)) {
+            HookClient(nClient);
+        } else {
             UnHookClient(nClient);
-            continue;
         }
-
-        HookClient(nClient);
     }
 }
 
@@ -248,7 +266,7 @@ static void ApplyEnableState() {
         UnHookAllClients();
     }
 
-    ApplyFireBulletDetour(bEnable);
+    ApplyDetours(bEnable);
 }
 
 // ================================================================
@@ -265,7 +283,7 @@ public void OnConVarChanged_Enable(ConVar hConVar, const char[] szOldValue, cons
 
 public void OnPluginStart() {
     for (int i = 0; i <= MAXPLAYERS; i++) {
-        g_nHookIDPre[i] = INVALID_HOOK_ID;
+        g_nHookIDProcessUserCmdsPre[i] = INVALID_HOOK_ID;
         ResetClientState(i);
     }
 
@@ -282,8 +300,8 @@ public void OnPluginStart() {
     );
 
     g_ConVarFireDelta = CreateConVar(
-        "sm_psilentfix_fire_delta", "0.5",
-        "Override FireBullet angles only if max(|dpitch|,|dyaw|) between orig and eye >= this (degrees)",
+        "sm_psilentfix_fire_delta", "7.0",
+        "Override angles only if max(|dpitch|,|dyaw|) between orig and eye >= this (degrees)",
         FCVAR_NOTIFY, true, 0.0, true, 180.0
     );
 
@@ -299,6 +317,11 @@ public void OnPluginStart() {
         SetFailState("Failed to find function in gamedata: CBasePlayer::ProcessUsercmds");
     }
 
+    g_hDetourTEFireBullets = DynamicDetour.FromConf(g_hGameData, "TE_FireBullets");
+    if (g_hDetourTEFireBullets == null) {
+        SetFailState("Failed to find function in gamedata: TE_FireBullets");
+    }
+
     g_hDetourFireBullet = DynamicDetour.FromConf(g_hGameData, "CTerrorPlayer::FireBullet");
     if (g_hDetourFireBullet == null) {
         SetFailState("Failed to find function in gamedata: CTerrorPlayer::FireBullet");
@@ -311,10 +334,14 @@ public void OnPluginStart() {
 
 public void OnPluginEnd() {
     UnHookAllClients();
-    ApplyFireBulletDetour(false);
+    ApplyDetours(false);
 
     if (g_hDetourFireBullet != null) {
         delete g_hDetourFireBullet;
+    }
+
+    if (g_hDetourTEFireBullets != null) {
+        delete g_hDetourTEFireBullets;
     }
 
     if (g_hHookProcessUserCmds != null) {
@@ -339,14 +366,6 @@ public void OnClientPutInServer(int nClient) {
         return;
     }
 
-    if ((nClient <= 0) || (nClient > MaxClients)) {
-        return;
-    }
-
-    if (!IsClientInGame(nClient) || IsFakeClient(nClient)) {
-        return;
-    }
-
     HookClient(nClient);
 }
 
@@ -355,7 +374,7 @@ public void OnClientDisconnect(int nClient) {
 }
 
 // ================================================================
-// DHooks callback
+// DHooks: ProcessUsercmds
 // ================================================================
 
 public MRESReturn Hook_ProcessUserCmds_Pre(int nClient, DHookParam hParams) {
@@ -363,11 +382,7 @@ public MRESReturn Hook_ProcessUserCmds_Pre(int nClient, DHookParam hParams) {
         return MRES_Ignored;
     }
 
-    if ((nClient <= 0) || (nClient > MaxClients)) {
-        return MRES_Ignored;
-    }
-
-    if (!IsClientInGame(nClient) || IsFakeClient(nClient)) {
+    if (!IsValidClient(nClient)) {
         return MRES_Ignored;
     }
 
@@ -375,14 +390,67 @@ public MRESReturn Hook_ProcessUserCmds_Pre(int nClient, DHookParam hParams) {
     GetClientEyeAngles(nClient, flEyeAnglesNow);
 
     CopyAngles(g_flEyeAngles[nClient], flEyeAnglesNow);
-    g_nEyeAnglesTick[nClient]  = GetGameTickCount();
+    g_nEyeAnglesTick[nClient] = GetGameTickCount();
     g_bEyeAnglesValid[nClient] = true;
 
     return MRES_Ignored;
 }
 
 // ================================================================
-// Detour FireBullet
+// Detour: TE_FireBullets (cdecl)
+// ================================================================
+
+public MRESReturn Detour_TE_FireBullets_Pre(DHookParam hParams) {
+    if (!g_ConVarEnable.BoolValue) {
+        return MRES_Ignored;
+    }
+
+    // args:
+    // 1) iPlayerIndex
+    // 2) vOrigin (ptr)
+    // 3) vAngles (ptr)
+
+    int nClient = hParams.Get(1);
+
+    if (!IsValidClient(nClient)) {
+        return MRES_Ignored;
+    }
+
+    if (hParams.IsNull(3)) {
+        return MRES_Ignored;
+    }
+
+    Address pAngleAddress = hParams.GetAddress(3);
+
+    int nTickNow = GetGameTickCount();
+    int nWindowTicks = ClampInt(g_ConVarTickWindow.IntValue, 0, 8);
+
+    if (!HasFreshEyeAngles(nClient, nTickNow, nWindowTicks)) {
+        return MRES_Ignored;
+    }
+
+    float flOriginalAngles[3];
+    ReadQAngle(pAngleAddress, flOriginalAngles);
+
+    float flEyeAngles[3];
+    flEyeAngles[ANGLE_PITCH] = g_flEyeAngles[nClient][ANGLE_PITCH];
+    flEyeAngles[ANGLE_YAW] = g_flEyeAngles[nClient][ANGLE_YAW];
+    flEyeAngles[ANGLE_ROLL] = g_flEyeAngles[nClient][ANGLE_ROLL];
+
+    float flDistance = AngleDistanceMax(flOriginalAngles, flEyeAngles);
+    float flThreshold = g_ConVarFireDelta.FloatValue;
+
+    if (flDistance < flThreshold) {
+        return MRES_Ignored;
+    }
+
+    WriteQAngle(pAngleAddress, flEyeAngles);
+
+    return MRES_Ignored;
+}
+
+// ================================================================
+// Detour: CTerrorPlayer::FireBullet (thiscall)
 // ================================================================
 
 public MRESReturn Detour_FireBullet_Pre(int nClient, DHookParam hParams) {
@@ -390,39 +458,34 @@ public MRESReturn Detour_FireBullet_Pre(int nClient, DHookParam hParams) {
         return MRES_Ignored;
     }
 
-    if ((nClient <= 0) || (nClient > MaxClients)) {
-        return MRES_Ignored;
-    }
-
-    if (!IsClientInGame(nClient) || IsFakeClient(nClient)) {
+    if (!IsValidClient(nClient)) {
         return MRES_Ignored;
     }
 
     // args: pos0 (1), pos1 (2), pos2 (3), angles* (4), clip (5), seed (6)
+
     if (hParams.IsNull(4)) {
         return MRES_Ignored;
     }
 
     Address pAngleAddress = hParams.GetAddress(4);
-    if (pAngleAddress == Address_Null) {
+
+    int nTickNow = GetGameTickCount();
+    int nWindowTicks = ClampInt(g_ConVarTickWindow.IntValue, 0, 8);
+
+    if (!HasFreshEyeAngles(nClient, nTickNow, nWindowTicks)) {
         return MRES_Ignored;
     }
 
     float flOriginalAngles[3];
     ReadQAngle(pAngleAddress, flOriginalAngles);
 
-    int nTickNow = GetGameTickCount();
-    int nWindowTicks = ClampInt(g_ConVarTickWindow.IntValue, 0, 8);
-    if (!HasFreshEyeAngles(nClient, nTickNow, nWindowTicks)) {
-        return MRES_Ignored;
-    }
-
     float flEyeAngles[3];
-    flEyeAngles[0] = g_flEyeAngles[nClient][0];
-    flEyeAngles[1] = g_flEyeAngles[nClient][1];
-    flEyeAngles[2] = g_flEyeAngles[nClient][2];
+    flEyeAngles[ANGLE_PITCH] = g_flEyeAngles[nClient][ANGLE_PITCH];
+    flEyeAngles[ANGLE_YAW] = g_flEyeAngles[nClient][ANGLE_YAW];
+    flEyeAngles[ANGLE_ROLL] = g_flEyeAngles[nClient][ANGLE_ROLL];
 
-    float flDistance  = AngleDistanceMax(flOriginalAngles, flEyeAngles);
+    float flDistance = AngleDistanceMax(flOriginalAngles, flEyeAngles);
     float flThreshold = g_ConVarFireDelta.FloatValue;
 
     if (flDistance < flThreshold) {
