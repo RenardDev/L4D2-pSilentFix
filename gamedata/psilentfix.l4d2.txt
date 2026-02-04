@@ -1,0 +1,95 @@
+"Games"
+{
+    "left4dead2"
+    {
+        "Offsets"
+        {
+            "CBasePlayer::ProcessUsercmds"
+            {
+                "windows" "453"
+                "linux"   "454"
+            }
+        }
+
+        "Signatures"
+        {
+            "CTerrorPlayer::FireBullet"
+            {
+                "library" "server"
+                "windows" "\x55\x8B\xEC\x81\xEC\x2A\x2A\x2A\x2A\x8B\x45\x2A\x57"
+                "linux"   "\x55\x89\xE5\x57\x56\x53\x81\xEC\x2A\x2A\x2A\x2A\x8B\x45\x2A\x89\x85\x2A\x2A\x2A\x2A\x8B"
+            }
+        }
+
+        "Functions"
+        {
+            "CBasePlayer::ProcessUsercmds"
+            {
+                "offset"   "CBasePlayer::ProcessUsercmds"
+                "hooktype" "entity"
+                "return"   "void"
+                "this"     "entity"
+
+                "arguments"
+                {
+                    "cmds"
+                    {
+                        "type" "objectptr"
+                    }
+                    "numcmds"
+                    {
+                        "type" "int"
+                    }
+                    "totalcmds"
+                    {
+                        "type" "int"
+                    }
+                    "dropped_packets"
+                    {
+                        "type" "int"
+                    }
+                    "paused"
+                    {
+                        "type" "bool"
+                    }
+                }
+            }
+
+            "CTerrorPlayer::FireBullet"
+            {
+                "signature" "CTerrorPlayer::FireBullet"
+                "callconv"  "thiscall"
+                "return"    "void"
+                "this"      "entity"
+
+                "arguments"
+                {
+                    "pos0"
+                    {
+                        "type" "float"
+                    }
+                    "pos1"
+                    {
+                        "type" "float"
+                    }
+                    "pos2"
+                    {
+                        "type" "float"
+                    }
+                    "angles"
+                    {
+                        "type" "objectptr"
+                    }
+                    "clip"
+                    {
+                        "type" "int"
+                    }
+                    "seed"
+                    {
+                        "type" "int"
+                    }
+                }
+            }
+        }
+    }
+}
