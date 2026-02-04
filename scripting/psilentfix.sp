@@ -164,7 +164,7 @@ static bool HasFreshEyeAngles(int nClient, int nTickNow, int nWindowTicks) {
 
 static void ApplyFireBulletDetour(bool bEnable) {
     if (bEnable) {
-        if ((!g_bDetourEnabled) && (g_hDetourFireBullet != null)) {
+        if ((!g_bDetourEnabled && (g_hDetourFireBullet != null)) {
             g_bDetourEnabled = g_hDetourFireBullet.Enable(Hook_Pre, Detour_FireBullet_Pre);
             if (!g_bDetourEnabled) {
                 LogError("Failed to enable FireBullet detour");
@@ -201,7 +201,7 @@ static void HookClient(int nClient) {
         return;
     }
 
-    if ((!IsClientInGame(nClient)) || (IsFakeClient(nClient))) {
+    if (!IsClientInGame(nClient) || IsFakeClient(nClient)) {
         return;
     }
 
@@ -224,7 +224,7 @@ static void HookAllClients() {
             continue;
         }
 
-        if ((!IsClientInGame(nClient)) || (IsFakeClient(nClient))) {
+        if (!IsClientInGame(nClient) || IsFakeClient(nClient)) {
             UnHookClient(nClient);
             continue;
         }
@@ -343,7 +343,7 @@ public void OnClientPutInServer(int nClient) {
         return;
     }
 
-    if ((!IsClientInGame(nClient)) || (IsFakeClient(nClient))) {
+    if (!IsClientInGame(nClient) || IsFakeClient(nClient)) {
         return;
     }
 
@@ -367,7 +367,7 @@ public MRESReturn Hook_ProcessUserCmds_Pre(int nClient, DHookParam hParams) {
         return MRES_Ignored;
     }
 
-    if ((!IsClientInGame(nClient)) || (IsFakeClient(nClient))) {
+    if (!IsClientInGame(nClient) || IsFakeClient(nClient)) {
         return MRES_Ignored;
     }
 
@@ -394,7 +394,7 @@ public MRESReturn Detour_FireBullet_Pre(int nClient, DHookParam hParams) {
         return MRES_Ignored;
     }
 
-    if ((!IsClientInGame(nClient)) || (IsFakeClient(nClient))) {
+    if (!IsClientInGame(nClient) || IsFakeClient(nClient)) {
         return MRES_Ignored;
     }
 
